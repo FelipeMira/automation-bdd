@@ -45,13 +45,22 @@ def _is_tty():
 
 
 def _getch():
+    import select
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
         ch = sys.stdin.read(1)
         if ch == "\x1b":
+            # Espera até 100ms por mais bytes (seta = \x1b[A/B/C/D)
+            # Se nada chegar, é ESC puro → retorna "\x1b"
+            rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if not rlist:
+                return "\x1b"
             ch2 = sys.stdin.read(1)
+            rlist2, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if not rlist2:
+                return f"\x1b{ch2}"
             ch3 = sys.stdin.read(1)
             return f"\x1b{ch2}{ch3}"
         return ch
