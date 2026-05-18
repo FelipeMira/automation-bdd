@@ -1,255 +1,472 @@
 #!/usr/bin/env python3
 """
-alfred — CLI de automação mobile BDD.
+alfred — CLI interativo de automação mobile BDD.
 
-Uso:
-    alfred gravar <nome>           Inicia gravação de um cenário
-    alfred passo <keyword> <desc>  Adiciona um passo à gravação ativa
-    alfred status                  Mostra o que foi gravado até agora
-    alfred parar                   Finaliza gravação e salva o .feature
-    alfred rodar [feature] [opts]  Executa testes (padrão: todas as features)
-    alfred paralelo [feature]      Executa iOS + Android em paralelo
-    alfred live iniciar            Inicia o daemon de execução ao vivo
-    alfred live parar              Para o daemon ao vivo
-    alfred live status             Verifica se o daemon está rodando
-    alfred devices                 Lista simuladores iOS e devices Android
-    alfred appium                  Verifica se o Appium está rodando
-    alfred screenshot              Tira um screenshot avulso
+Uso interativo:  ./alfred
+Uso direto:      ./alfred rodar | gravar <nome> | parar | status | ...
 """
 
 import os
+import re
 import sys
 import subprocess
 import time
+import tty
+import termios
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 
+PID_FILE    = Path("/tmp/bdd_live_pid")
+READY_FILE  = Path("/tmp/bdd_live_ready")
+CMD_FILE    = Path("/tmp/bdd_live_cmd")
+RESULT_FILE = Path("/tmp/bdd_live_result")
+
 # ── Cores ANSI ────────────────────────────────────────────────────────────────
-G  = "\033[0;32m"   # verde
-Y  = "\033[0;33m"   # amarelo
-C  = "\033[0;36m"   # ciano
-R  = "\033[0;31m"   # vermelho
-B  = "\033[1m"      # negrito
-NC = "\033[0m"      # reset
+G  = "\033[0;32m"
+Y  = "\033[0;33m"
+C  = "\033[0;36m"
+R  = "\033[0;31m"
+B  = "\033[1m"
+DIM = "\033[2m"
+NC = "\033[0m"
 
-PID_FILE   = Path("/tmp/alfred_live_pid")
-READY_FILE = Path("/tmp/alfred_live_ready")
-CMD_FILE   = Path("/tmp/alfred_live_cmd")
-RESULT_FILE = Path("/tmp/alfred_live_result")
-
-
-def ok(msg):  print(f"{G}✓{NC}  {msg}")
-def err(msg): print(f"{R}✗{NC}  {msg}")
-def info(msg): print(f"{C}→{NC}  {msg}")
-def warn(msg): print(f"{Y}!{NC}  {msg}")
+def ok(msg):   print(f"  {G}✓{NC}  {msg}")
+def err(msg):  print(f"  {R}✗{NC}  {msg}")
+def info(msg): print(f"  {C}→{NC}  {msg}")
+def warn(msg): print(f"  {Y}!{NC}  {msg}")
 
 
-# ── Ajuda ─────────────────────────────────────────────────────────────────────
+# ── Leitura de tecla única (sem Enter) ────────────────────────────────────────
 
-def cmd_help():
-    print(f"""
-{B}{C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}
-{B}  alfred — Automação Mobile BDD{NC}
-{C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}
-
-{B}GRAVAÇÃO{NC}
-  {G}alfred gravar <nome>{NC}              Inicia gravação de um cenário
-  {G}alfred passo <keyword> <desc>{NC}     Adiciona passo (Given/When/Then/And)
-  {G}alfred status{NC}                     Mostra passos gravados até agora
-  {G}alfred parar{NC}                      Finaliza e salva o .feature
-
-{B}EXECUÇÃO{NC}
-  {G}alfred rodar{NC}                      Roda todas as features
-  {G}alfred rodar <feature>{NC}            Roda uma feature específica
-  {G}alfred rodar --tags @smoke{NC}        Filtra por tag
-  {G}alfred rodar --platform ios{NC}       Força plataforma iOS ou android
-  {G}alfred paralelo{NC}                   Roda iOS + Android em paralelo
-  {G}alfred paralelo <feature>{NC}         Paralelo em feature específica
-
-{B}LIVE RUNNER (execução ao vivo durante gravação){NC}
-  {G}alfred live iniciar{NC}               Inicia daemon Appium em background
-  {G}alfred live parar{NC}                 Para o daemon
-  {G}alfred live status{NC}                Verifica se está rodando
-
-{B}DEVICE / AMBIENTE{NC}
-  {G}alfred devices{NC}                    Lista simuladores iOS e devices Android
-  {G}alfred appium{NC}                     Verifica se o Appium está rodando
-  {G}alfred screenshot{NC}                 Tira screenshot avulso do device
-
-{B}FEATURES DISPONÍVEIS{NC}""")
-    _list_features()
-    print(f"""
-{C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}
-""")
-
-
-def _list_features():
-    features = sorted(ROOT.glob("features/**/*.feature"))
-    if not features:
-        print("  (nenhuma feature encontrada)")
-        return
-    for f in features:
-        rel = f.relative_to(ROOT)
-        print(f"  {Y}•{NC} {rel}")
-
-
-# ── Gravação ──────────────────────────────────────────────────────────────────
-
-def cmd_gravar(args):
-    if not args:
-        err("Informe o nome do cenário. Ex: alfred gravar login_usuario")
-        sys.exit(1)
-    from utils.recorder import cmd_start
-    cmd_start(args[0])
-
-
-def cmd_passo(args):
-    if len(args) < 2:
-        err("Uso: alfred passo <Given|When|Then|And> \"descrição\"")
-        sys.exit(1)
-    from utils.recorder import cmd_step
-    cmd_step(args[0], " ".join(args[1:]))
-
-
-def cmd_status():
-    from utils.recorder import cmd_status as _status
-    _status()
-
-
-def cmd_parar():
-    from utils.recorder import cmd_stop
-    cmd_stop()
-
-
-# ── Execução ──────────────────────────────────────────────────────────────────
-
-def cmd_rodar(args):
-    _run_script("run.sh", args)
-
-
-def cmd_paralelo(args):
-    _run_script("run-parallel.sh", args)
-
-
-def _run_script(script, args):
-    cmd = [str(ROOT / script)] + args
+def _getch():
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
     try:
-        subprocess.run(cmd, cwd=str(ROOT))
-    except KeyboardInterrupt:
-        pass
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            ch2 = sys.stdin.read(1)
+            ch3 = sys.stdin.read(1)
+            return f"\x1b{ch2}{ch3}"
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _prompt(msg, default=""):
+    """Input simples com prompt colorido."""
+    val = input(f"  {C}?{NC}  {msg}{f' [{default}]' if default else ''}: ").strip()
+    return val or default
+
+
+# ── Menu interativo com setas ─────────────────────────────────────────────────
+
+def _menu(titulo, opcoes, subtitulo=""):
+    """
+    Exibe menu navegável com ↑↓ e Enter.
+    opcoes: lista de (label, valor)  |  separador: ("---", None)
+    Retorna o valor da opção selecionada, ou None se ESC/q.
+    """
+    idx = 0
+    # Pula separadores ao iniciar
+    while idx < len(opcoes) and opcoes[idx][1] is None:
+        idx += 1
+
+    while True:
+        os.system("clear")
+        _banner(titulo, subtitulo)
+
+        for i, (label, val) in enumerate(opcoes):
+            if val is None:
+                print(f"  {DIM}──────────────────────────────{NC}")
+            elif i == idx:
+                print(f"  {B}{G}▶  {label}{NC}")
+            else:
+                print(f"     {label}")
+
+        print(f"\n  {DIM}↑↓ navegar  Enter selecionar  ESC voltar{NC}")
+
+        key = _getch()
+
+        if key in ("\x1b[A", "k"):   # ↑
+            idx -= 1
+            while idx >= 0 and opcoes[idx][1] is None:
+                idx -= 1
+            if idx < 0:
+                idx = len(opcoes) - 1
+                while opcoes[idx][1] is None:
+                    idx -= 1
+
+        elif key in ("\x1b[B", "j"): # ↓
+            idx += 1
+            while idx < len(opcoes) and opcoes[idx][1] is None:
+                idx += 1
+            if idx >= len(opcoes):
+                idx = 0
+                while opcoes[idx][1] is None:
+                    idx += 1
+
+        elif key in ("\r", "\n"):
+            return opcoes[idx][1]
+
+        elif key in ("\x1b", "q"):
+            return None
+
+
+def _banner(titulo, subtitulo=""):
+    print(f"\n{B}{C}  ══════════════════════════════════{NC}")
+    print(f"{B}    alfred — {titulo}{NC}")
+    if subtitulo:
+        print(f"  {DIM}  {subtitulo}{NC}")
+    print(f"{C}  ══════════════════════════════════{NC}\n")
+
+
+# ── Menu principal ─────────────────────────────────────────────────────────────
+
+def menu_principal():
+    while True:
+        live_status = f"{G}ativo{NC}" if READY_FILE.exists() else f"{DIM}inativo{NC}"
+        rec_status  = ""
+        state_file  = Path("/tmp/bdd_recording_state")
+        if state_file.exists():
+            nome = state_file.read_text().strip()
+            steps_file = Path("/tmp/bdd_recording_steps")
+            n = len(steps_file.read_text().strip().splitlines()) if steps_file.exists() else 0
+            rec_status = f"gravando: {Y}{nome}{NC} ({n} passos)"
+        else:
+            rec_status = f"{DIM}sem gravação ativa{NC}"
+
+        subtitulo = f"live: {live_status}  |  {rec_status}"
+
+        opcoes = [
+            ("Gravar cenário",          "gravar"),
+            ("Executar testes",         "rodar"),
+            ("Execução paralela",       "paralelo"),
+            ("---",                     None),
+            ("Live runner",             "live"),
+            ("Dispositivos",            "devices"),
+            ("Verificar Appium",        "appium"),
+            ("Screenshot",              "screenshot"),
+            ("---",                     None),
+            ("Sair",                    "sair"),
+        ]
+
+        escolha = _menu("Automação Mobile BDD", opcoes, subtitulo)
+
+        if escolha is None or escolha == "sair":
+            os.system("clear")
+            print(f"\n  Até mais!\n")
+            break
+        elif escolha == "gravar":    menu_gravar()
+        elif escolha == "rodar":     menu_rodar()
+        elif escolha == "paralelo":  menu_paralelo()
+        elif escolha == "live":      menu_live()
+        elif escolha == "devices":   tela_devices()
+        elif escolha == "appium":    tela_appium()
+        elif escolha == "screenshot": tela_screenshot()
+
+
+# ── Gravar ────────────────────────────────────────────────────────────────────
+
+def menu_gravar():
+    state_file = Path("/tmp/bdd_recording_state")
+
+    while True:
+        gravando = state_file.exists()
+        nome = state_file.read_text().strip() if gravando else None
+        steps_file = Path("/tmp/bdd_recording_steps")
+        passos = steps_file.read_text().strip().splitlines() if (gravando and steps_file.exists()) else []
+
+        if gravando:
+            subtitulo = f"gravando: {nome}  ({len(passos)} passos)"
+            opcoes = [
+                ("Adicionar passo",     "passo"),
+                ("Ver status",          "status"),
+                ("Finalizar e salvar",  "parar"),
+                ("---",                 None),
+                ("Voltar",              None),
+            ]
+        else:
+            subtitulo = "nenhuma gravação ativa"
+            opcoes = [
+                ("Iniciar nova gravação", "iniciar"),
+                ("---",                   None),
+                ("Voltar",                None),
+            ]
+
+        escolha = _menu("Gravar Cenário", opcoes, subtitulo)
+
+        if escolha is None:
+            return
+
+        elif escolha == "iniciar":
+            os.system("clear")
+            _banner("Nova Gravação")
+            nome = _prompt("Nome do cenário (ex: login_usuario)")
+            if nome:
+                from utils.recorder import cmd_start
+                cmd_start(nome)
+                input(f"\n  {DIM}Enter para continuar...{NC}")
+
+        elif escolha == "passo":
+            os.system("clear")
+            _banner("Adicionar Passo", f"cenário: {nome}")
+            _mostrar_passos(passos)
+
+            kw_opcoes = [
+                ("Given  — pré-condição / estado inicial", "Given"),
+                ("When   — ação do usuário",               "When"),
+                ("Then   — verificação / resultado",       "Then"),
+                ("And    — continuação do passo anterior", "And"),
+                ("---",                                    None),
+                ("Voltar",                                 None),
+            ]
+            kw = _menu("Keyword do passo", kw_opcoes)
+            if kw is None:
+                continue
+
+            os.system("clear")
+            _banner("Adicionar Passo", f"{kw}")
+            desc = _prompt("Descrição do passo")
+            if desc:
+                from utils.recorder import cmd_step
+                cmd_step(kw, desc)
+                if READY_FILE.exists():
+                    _executar_live(desc)
+                input(f"\n  {DIM}Enter para continuar...{NC}")
+
+        elif escolha == "status":
+            os.system("clear")
+            _banner("Status da Gravação", nome)
+            _mostrar_passos(passos)
+            input(f"\n  {DIM}Enter para continuar...{NC}")
+
+        elif escolha == "parar":
+            os.system("clear")
+            _banner("Finalizar Gravação")
+            from utils.recorder import cmd_stop
+            cmd_stop()
+            input(f"\n  {DIM}Enter para continuar...{NC}")
+            return
+
+
+def _mostrar_passos(passos):
+    if not passos:
+        print(f"  {DIM}(nenhum passo ainda){NC}\n")
+        return
+    for i, s in enumerate(passos, 1):
+        if "|" in s:
+            kw, desc = s.split("|", 1)
+            cor = {
+                "Given": G, "When": C, "Then": Y, "And": DIM
+            }.get(kw, NC)
+            print(f"  {DIM}{i:02d}.{NC}  {cor}{kw}{NC}  {desc}")
+    print()
+
+
+def _executar_live(desc):
+    CMD_FILE.write_text(desc)
+    for _ in range(15):
+        if RESULT_FILE.exists():
+            result = RESULT_FILE.read_text().strip()
+            RESULT_FILE.unlink(missing_ok=True)
+            if result.startswith("ok"):
+                ok(f"Executado no device")
+            else:
+                warn(f"Device: {result}")
+            return
+        time.sleep(0.5)
+    warn("Live runner não respondeu.")
+
+
+# ── Rodar ─────────────────────────────────────────────────────────────────────
+
+def menu_rodar():
+    features = sorted(ROOT.glob("features/**/*.feature"))
+    opcoes = [("Todas as features", "__todas__")]
+    for f in features:
+        opcoes.append((str(f.relative_to(ROOT)), str(f)))
+    opcoes += [("---", None), ("Voltar", None)]
+
+    escolha = _menu("Executar Testes", opcoes, "escolha uma feature")
+    if escolha is None:
+        return
+
+    plataforma_opcoes = [
+        ("Detectar automaticamente", ""),
+        ("iOS",                      "--platform ios"),
+        ("Android",                  "--platform android"),
+        ("---",                      None),
+        ("Voltar",                   None),
+    ]
+    plat = _menu("Plataforma", plataforma_opcoes)
+    if plat is None:
+        return
+
+    os.system("clear")
+    _banner("Executando Testes")
+    args = [] if escolha == "__todas__" else [escolha]
+    if plat:
+        args += plat.split()
+    subprocess.run([str(ROOT / "run.sh")] + args, cwd=str(ROOT))
+    input(f"\n  {DIM}Enter para continuar...{NC}")
+
+
+# ── Paralelo ──────────────────────────────────────────────────────────────────
+
+def menu_paralelo():
+    features = sorted(ROOT.glob("features/**/*.feature"))
+    opcoes = [("Todas as features", "__todas__")]
+    for f in features:
+        opcoes.append((str(f.relative_to(ROOT)), str(f)))
+    opcoes += [("---", None), ("Voltar", None)]
+
+    escolha = _menu("Execução Paralela", opcoes, "iOS + Android simultâneo")
+    if escolha is None:
+        return
+
+    os.system("clear")
+    _banner("Execução Paralela", "iOS + Android")
+    args = [] if escolha == "__todas__" else [escolha]
+    subprocess.run([str(ROOT / "run-parallel.sh")] + args, cwd=str(ROOT))
+    input(f"\n  {DIM}Enter para continuar...{NC}")
 
 
 # ── Live Runner ───────────────────────────────────────────────────────────────
 
-def cmd_live(args):
-    sub = args[0] if args else "status"
+def menu_live():
+    while True:
+        ativo = READY_FILE.exists() and PID_FILE.exists()
+        pid   = PID_FILE.read_text().strip() if PID_FILE.exists() else "—"
+        sub   = f"PID {pid} — {'sessão ativa' if ativo else 'parado'}"
 
-    if sub == "iniciar":
-        if READY_FILE.exists():
-            warn("Daemon já está rodando.")
-            _live_show_status()
+        if ativo:
+            opcoes = [
+                ("Parar daemon",   "parar"),
+                ("---",            None),
+                ("Voltar",         None),
+            ]
+        else:
+            opcoes = [
+                ("Iniciar daemon", "iniciar"),
+                ("---",            None),
+                ("Voltar",         None),
+            ]
+
+        escolha = _menu("Live Runner", opcoes, sub)
+        if escolha is None:
             return
-        log = Path("/tmp/alfred_live_runner.log")
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "utils.live_runner"],
-            cwd=str(ROOT),
-            env=env,
-            stdout=log.open("w"),
-            stderr=subprocess.STDOUT,
-        )
-        info(f"Iniciando daemon (PID {proc.pid})...")
-        for _ in range(30):
+
+        os.system("clear")
+        _banner("Live Runner")
+
+        if escolha == "iniciar":
             if READY_FILE.exists():
-                ok("Live runner pronto — sessão Appium ativa.")
-                return
-            time.sleep(1)
-        err("Timeout aguardando sessão Appium. Verifique o log: /tmp/alfred_live_runner.log")
+                warn("Daemon já está rodando.")
+            else:
+                log = Path("/tmp/bdd_live_runner.log")
+                env = os.environ.copy()
+                env["PYTHONUNBUFFERED"] = "1"
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "utils.live_runner"],
+                    cwd=str(ROOT), env=env,
+                    stdout=log.open("w"), stderr=subprocess.STDOUT,
+                )
+                info(f"Iniciando daemon (PID {proc.pid})...")
+                for _ in range(30):
+                    if READY_FILE.exists():
+                        ok("Sessão Appium pronta.")
+                        break
+                    time.sleep(1)
+                    print(".", end="", flush=True)
+                else:
+                    err("Timeout. Veja: /tmp/bdd_live_runner.log")
 
-    elif sub == "parar":
-        if not PID_FILE.exists():
-            warn("Nenhum daemon ativo.")
-            return
-        CMD_FILE.write_text("STOP")
-        info("Sinal de parada enviado.")
-        for _ in range(10):
+        elif escolha == "parar":
             if not PID_FILE.exists():
-                ok("Daemon encerrado.")
-                return
-            time.sleep(1)
-        warn("Daemon não respondeu — pode já ter encerrado.")
+                warn("Nenhum daemon ativo.")
+            else:
+                CMD_FILE.write_text("STOP")
+                info("Sinal enviado...")
+                for _ in range(10):
+                    if not PID_FILE.exists():
+                        ok("Daemon encerrado.")
+                        break
+                    time.sleep(1)
 
-    elif sub == "status":
-        _live_show_status()
-
-    else:
-        err(f"Subcomando desconhecido: {sub}. Use: iniciar | parar | status")
-
-
-def _live_show_status():
-    if READY_FILE.exists() and PID_FILE.exists():
-        pid = PID_FILE.read_text().strip()
-        ok(f"Live runner ativo (PID {pid}) — sessão Appium pronta.")
-    elif PID_FILE.exists():
-        warn("Processo existe mas sessão ainda não está pronta.")
-    else:
-        info("Live runner não está rodando.")
+        input(f"\n  {DIM}Enter para continuar...{NC}")
 
 
 # ── Devices ───────────────────────────────────────────────────────────────────
 
-def cmd_devices():
-    print(f"\n{B}iOS — Simuladores:{NC}")
+def tela_devices():
+    os.system("clear")
+    _banner("Dispositivos")
+
+    print(f"  {B}iOS — Simuladores:{NC}")
     r = subprocess.run(
         ["xcrun", "simctl", "list", "devices", "booted"],
         capture_output=True, text=True
     )
-    lines = [l for l in r.stdout.splitlines() if "--" not in l and l.strip()]
-    if lines:
-        import re
-        for l in lines:
-            # Remove UDID e cabeçalhos do simctl
+    linhas = [l for l in r.stdout.splitlines() if l.strip() and "--" not in l]
+    if linhas:
+        for l in linhas:
             clean = re.sub(r"\([0-9A-F-]{36}\)", "", l, flags=re.I).strip()
             if clean and "==" not in clean:
-                print(f"  {G}•{NC} {clean}")
+                print(f"    {G}•{NC}  {clean}")
     else:
-        print("  (nenhum simulador ativo)")
+        print(f"    {DIM}(nenhum simulador ativo){NC}")
 
-    print(f"\n{B}Android — Devices:{NC}")
+    print(f"\n  {B}Android — Devices:{NC}")
     r = subprocess.run(["adb", "devices"], capture_output=True, text=True)
-    lines = [l for l in r.stdout.splitlines()[1:] if l.strip()]
-    if lines:
-        for l in lines:
-            print(f"  {G}•{NC} {l.strip()}")
+    linhas = [l for l in r.stdout.splitlines()[1:] if l.strip()]
+    if linhas:
+        for l in linhas:
+            print(f"    {G}•{NC}  {l.strip()}")
     else:
-        print("  (nenhum device conectado)")
+        print(f"    {DIM}(nenhum device conectado){NC}")
+
     print()
+    input(f"  {DIM}Enter para voltar...{NC}")
 
 
 # ── Appium ────────────────────────────────────────────────────────────────────
 
-def cmd_appium():
-    r = subprocess.run(
-        ["curl", "-s", "http://localhost:4723/status"],
-        capture_output=True, text=True, timeout=5
-    )
-    if r.returncode == 0 and "ready" in r.stdout.lower():
-        ok("Appium rodando em localhost:4723")
-    else:
-        err("Appium não está rodando. Inicie com: appium")
+def tela_appium():
+    os.system("clear")
+    _banner("Verificar Appium")
+    try:
+        r = subprocess.run(
+            ["curl", "-s", "http://localhost:4723/status"],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode == 0 and "ready" in r.stdout.lower():
+            ok("Appium rodando em localhost:4723")
+        else:
+            err("Appium não está rodando.")
+            info("Inicie com:  appium")
+    except Exception:
+        err("Não foi possível conectar ao Appium.")
+    print()
+    input(f"  {DIM}Enter para voltar...{NC}")
 
 
-# ── Screenshot avulso ─────────────────────────────────────────────────────────
+# ── Screenshot ────────────────────────────────────────────────────────────────
 
-def cmd_screenshot():
+def tela_screenshot():
+    os.system("clear")
+    _banner("Screenshot")
     if not READY_FILE.exists():
-        err("Live runner não está ativo. Inicie com: alfred live iniciar")
-        sys.exit(1)
+        err("Live runner não está ativo.")
+        info("Inicie pelo menu  Live runner → Iniciar daemon")
+        print()
+        input(f"  {DIM}Enter para voltar...{NC}")
+        return
+
     CMD_FILE.write_text("tiro um screenshot")
-    info("Capturando screenshot...")
+    info("Capturando...")
     for _ in range(15):
         if RESULT_FILE.exists():
             result = RESULT_FILE.read_text().strip()
@@ -258,54 +475,105 @@ def cmd_screenshot():
                 ok("Screenshot salvo em automation_scripts/screenshots/")
             else:
                 err(f"Erro: {result}")
-            return
+            break
         time.sleep(1)
-    err("Sem resposta do live runner.")
+    else:
+        err("Sem resposta do live runner.")
+    print()
+    input(f"  {DIM}Enter para voltar...{NC}")
 
 
-# ── Dispatch ──────────────────────────────────────────────────────────────────
+# ── Comandos diretos (modo não interativo) ────────────────────────────────────
 
-COMMANDS = {
-    "gravar":   cmd_gravar,
-    "passo":    cmd_passo,
-    "status":   lambda _=None: cmd_status(),
-    "parar":    lambda _=None: cmd_parar(),
-    "rodar":    cmd_rodar,
-    "paralelo": cmd_paralelo,
-    "live":     cmd_live,
-    "devices":  lambda _=None: cmd_devices(),
-    "appium":   lambda _=None: cmd_appium(),
-    "screenshot": lambda _=None: cmd_screenshot(),
-    "ajuda":    lambda _=None: cmd_help(),
-    "--help":   lambda _=None: cmd_help(),
-    "-h":       lambda _=None: cmd_help(),
-}
+def _cmd_direto(argv):
+    from utils.recorder import cmd_start, cmd_step, cmd_status, cmd_stop
 
-if __name__ == "__main__":
-    argv = sys.argv[1:]
-    if not argv:
-        cmd_help()
-        sys.exit(0)
-
-    cmd = argv[0]
+    cmd  = argv[0]
     rest = argv[1:]
 
-    if cmd not in COMMANDS:
+    if cmd == "gravar":
+        if not rest:
+            err("Uso: alfred gravar <nome>"); sys.exit(1)
+        cmd_start(rest[0])
+
+    elif cmd == "passo":
+        if len(rest) < 2:
+            err("Uso: alfred passo <Given|When|Then|And> \"descrição\""); sys.exit(1)
+        cmd_step(rest[0], " ".join(rest[1:]))
+
+    elif cmd == "status":
+        cmd_status()
+
+    elif cmd == "parar":
+        cmd_stop()
+
+    elif cmd == "rodar":
+        subprocess.run([str(ROOT / "run.sh")] + rest, cwd=str(ROOT))
+
+    elif cmd == "paralelo":
+        subprocess.run([str(ROOT / "run-parallel.sh")] + rest, cwd=str(ROOT))
+
+    elif cmd == "live":
+        sub = rest[0] if rest else "status"
+        if sub == "iniciar":
+            log = Path("/tmp/bdd_live_runner.log")
+            env = os.environ.copy(); env["PYTHONUNBUFFERED"] = "1"
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "utils.live_runner"],
+                cwd=str(ROOT), env=env,
+                stdout=log.open("w"), stderr=subprocess.STDOUT,
+            )
+            print(f"Iniciando (PID {proc.pid})...")
+            for _ in range(30):
+                if READY_FILE.exists():
+                    ok("Sessão Appium pronta."); return
+                time.sleep(1)
+            err("Timeout.")
+        elif sub == "parar":
+            if PID_FILE.exists():
+                CMD_FILE.write_text("STOP")
+                ok("Sinal enviado.")
+            else:
+                warn("Nenhum daemon ativo.")
+        else:
+            if READY_FILE.exists() and PID_FILE.exists():
+                ok(f"Live runner ativo (PID {PID_FILE.read_text().strip()})")
+            else:
+                info("Live runner não está rodando.")
+
+    elif cmd == "devices":
+        tela_devices()
+
+    elif cmd == "appium":
+        r = subprocess.run(["curl", "-s", "http://localhost:4723/status"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and "ready" in r.stdout.lower():
+            ok("Appium rodando em localhost:4723")
+        else:
+            err("Appium não está rodando. Inicie com: appium")
+
+    elif cmd == "screenshot":
+        tela_screenshot()
+
+    else:
         err(f"Comando desconhecido: '{cmd}'")
-        info("Use 'alfred' ou 'alfred ajuda' para ver os comandos disponíveis.")
+        info("Execute  ./alfred  para o menu interativo.")
         sys.exit(1)
 
-    fn = COMMANDS[cmd]
-    try:
-        sig = fn.__code__.co_varnames[:fn.__code__.co_argcount]
-        if sig and sig[0] != "self":
-            fn(rest)
-        else:
-            fn()
-    except SystemExit:
-        raise
-    except KeyboardInterrupt:
-        print()
-    except Exception as e:
-        err(str(e))
-        sys.exit(1)
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        try:
+            _cmd_direto(sys.argv[1:])
+        except KeyboardInterrupt:
+            print()
+        except Exception as e:
+            err(str(e)); sys.exit(1)
+    else:
+        try:
+            menu_principal()
+        except KeyboardInterrupt:
+            os.system("clear")
+            print("\n  Até mais!\n")
