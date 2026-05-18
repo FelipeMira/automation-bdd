@@ -29,8 +29,9 @@ automation-bdd/
 │   └── accessibility.py            # Parse da árvore XML de acessibilidade do Appium
 ├── automation_scripts/
 │   └── screenshots/                # Evidências de execução (gerado automaticamente)
-├── run.sh                          # Execução simples (iOS ou Android)
-├── run-parallel.sh                 # Execução paralela iOS + Android simultâneo
+├── alfred                          # CLI principal — ponto de entrada de tudo
+├── run.sh                          # Execução simples (chamado pelo alfred)
+├── run-parallel.sh                 # Execução paralela (chamado pelo alfred)
 ├── behave.ini                      # Configuração do Behave
 ├── requirements.txt
 └── CLAUDE.md                       # Instruções do agente Claude Code
@@ -65,6 +66,36 @@ appium driver install uiautomator2
 
 ---
 
+## Alfred — CLI principal
+
+O `alfred` é o ponto de entrada de tudo no projeto. Sem precisar decorar comandos do behave, run.sh ou recorder.
+
+```bash
+./alfred                           # menu de ajuda completo
+```
+
+### Referência de comandos
+
+| Comando | O que faz |
+|---|---|
+| `./alfred gravar <nome>` | Inicia gravação de um cenário |
+| `./alfred passo <keyword> <desc>` | Adiciona passo (Given/When/Then/And) |
+| `./alfred status` | Mostra passos gravados até agora |
+| `./alfred parar` | Finaliza e salva o `.feature` |
+| `./alfred rodar` | Roda todas as features |
+| `./alfred rodar <feature>` | Roda uma feature específica |
+| `./alfred rodar --tags @smoke` | Filtra por tag |
+| `./alfred rodar --platform ios` | Força plataforma iOS ou Android |
+| `./alfred paralelo` | Roda iOS + Android em paralelo |
+| `./alfred live iniciar` | Sobe daemon Appium em background |
+| `./alfred live parar` | Para o daemon |
+| `./alfred live status` | Verifica se o daemon está rodando |
+| `./alfred devices` | Lista simuladores iOS e devices Android |
+| `./alfred appium` | Verifica se o Appium está rodando |
+| `./alfred screenshot` | Tira screenshot avulso do device |
+
+---
+
 ## Como usar
 
 ### 1. Iniciar o Appium
@@ -73,44 +104,21 @@ appium driver install uiautomator2
 appium
 ```
 
-### 2. Ter um simulador/emulador ativo
+### 2. Verificar dispositivos
 
 ```bash
-# iOS — ver simuladores disponíveis
-xcrun simctl list devices
-
-# iOS — iniciar um simulador
-xcrun simctl boot "<nome-ou-udid>"
-open -a Simulator
-
-# Android — verificar emulador
-adb devices
+./alfred devices    # lista simuladores iOS e devices Android ativos
+./alfred appium     # confirma que o servidor está no ar
 ```
 
-### 3. Rodar uma feature
+### 3. Rodar testes
 
 ```bash
-# Todas as features
-./run.sh
-
-# Feature específica
-./run.sh features/automation_scripts/editando_ajustes.feature
-
-# Com filtro de tag
-./run.sh --tags @smoke
-
-# Forçar plataforma
-./run.sh --platform ios
-./run.sh --platform android
-```
-
-### 4. Execução paralela (iOS + Android simultâneo)
-
-```bash
-./run-parallel.sh
-
-# Feature específica em paralelo
-./run-parallel.sh features/pesquisar_batata_da_terra.feature
+./alfred rodar                                                        # todas as features
+./alfred rodar features/automation_scripts/editando_ajustes.feature  # feature específica
+./alfred rodar --tags @smoke                                          # filtro por tag
+./alfred rodar --platform ios                                         # força plataforma
+./alfred paralelo                                                     # iOS + Android ao mesmo tempo
 ```
 
 Logs em tempo real com prefixo `[iOS]` e `[Android]`. Resultado final exibe ✓/✗ por plataforma.
@@ -119,18 +127,17 @@ Logs em tempo real com prefixo `[iOS]` e `[Android]`. Resultado final exibe ✓/
 
 ## Gravação de cenários
 
-### Via CLI
+### Via Alfred
 
 ```bash
-python -m utils.recorder start "nome_do_cenario"
-python -m utils.recorder step "Given" "abro os ajustes"
-python -m utils.recorder step "When"  "clicar em câmera"
-python -m utils.recorder step "When"  "clicar no seletor de Grade"
-python -m utils.recorder step "Then"  "volto para home"
-python -m utils.recorder stop
+./alfred live iniciar                          # sobe sessão Appium em background
+./alfred gravar editando_ajustes               # começa a gravar
+./alfred passo Given "abro os ajustes"
+./alfred passo When  "clicar em câmera"
+./alfred passo When  "clicar no seletor de Grade"
+./alfred passo Then  "volto para home"
+./alfred parar                                 # salva em features/automation_scripts/
 ```
-
-Gera automaticamente `features/automation_scripts/nome_do_cenario.feature`.
 
 ### Via agente (Claude Code)
 
@@ -138,19 +145,19 @@ Com o projeto aberto no Claude Code, descreva os passos em linguagem natural:
 
 > "grava um cenário que abre o safari, pesquisa por 'batata da terra' e tira screenshot"
 
-O agente converte para Gherkin, grava os steps e — com o `live_runner` ativo — executa cada passo em tempo real no device.
+O agente converte para Gherkin, grava os steps e — com o live runner ativo — executa cada passo em tempo real no device.
 
-#### Live Runner (execução ao vivo durante gravação)
+#### Live Runner
+
+O live runner mantém uma sessão Appium ativa em background para execução ao vivo durante a gravação.
 
 ```bash
-# Iniciar o daemon (mantém sessão Appium ativa)
-python -m utils.live_runner
-
-# Parar
-python -m utils.live_runner stop
+./alfred live iniciar   # inicia o daemon
+./alfred live status    # verifica se está rodando
+./alfred live parar     # encerra o daemon
 ```
 
-Comunicação via arquivos em `/tmp/`:
+Comunicação interna via arquivos em `/tmp/`:
 
 | Arquivo | Função |
 |---|---|
