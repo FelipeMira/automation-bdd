@@ -40,6 +40,10 @@ def warn(msg): print(f"  {Y}!{NC}  {msg}")
 
 # ── Leitura de tecla única (sem Enter) ────────────────────────────────────────
 
+def _is_tty():
+    return sys.stdin.isatty()
+
+
 def _getch():
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
@@ -57,20 +61,33 @@ def _getch():
 
 def _prompt(msg, default=""):
     """Input simples com prompt colorido."""
-    val = input(f"  {C}?{NC}  {msg}{f' [{default}]' if default else ''}: ").strip()
-    return val or default
+    try:
+        val = input(f"  {C}?{NC}  {msg}{f' [{default}]' if default else ''}: ").strip()
+        return val or default
+    except EOFError:
+        return default
+
+
+def _pause():
+    """Aguarda Enter; ignora EOF em modo não-interativo."""
+    try:
+        input(f"\n  {DIM}Enter para continuar...{NC}")
+    except EOFError:
+        pass
 
 
 # ── Menu interativo com setas ─────────────────────────────────────────────────
 
 def _menu(titulo, opcoes, subtitulo=""):
     """
-    Exibe menu navegável com ↑↓ e Enter.
+    Exibe menu navegável com ↑↓ e Enter (TTY) ou numerado (não-TTY).
     opcoes: lista de (label, valor)  |  separador: ("---", None)
-    Retorna o valor da opção selecionada, ou None se ESC/q.
+    Retorna o valor da opção selecionada, ou None se ESC/q/0.
     """
+    if not _is_tty():
+        return _menu_numerado(titulo, opcoes, subtitulo)
+
     idx = 0
-    # Pula separadores ao iniciar
     while idx < len(opcoes) and opcoes[idx][1] is None:
         idx += 1
 
@@ -113,6 +130,26 @@ def _menu(titulo, opcoes, subtitulo=""):
 
         elif key in ("\x1b", "q"):
             return None
+
+
+def _menu_numerado(titulo, opcoes, subtitulo=""):
+    """Fallback para terminais não-interativos: seleção por número."""
+    _banner(titulo, subtitulo)
+    selecionaveis = [(i, label, val) for i, (label, val) in enumerate(opcoes) if val is not None]
+    for n, (_, label, _) in enumerate(selecionaveis, 1):
+        print(f"  {G}{n}.{NC}  {label}")
+    print(f"  {DIM}0.  Voltar{NC}\n")
+    try:
+        try:
+            escolha = input(f"  {C}?{NC}  Escolha: ").strip()
+        except EOFError:
+            return None
+        n = int(escolha)
+        if n == 0:
+            return None
+        return selecionaveis[n - 1][2]
+    except (ValueError, IndexError):
+        return None
 
 
 def _banner(titulo, subtitulo=""):
@@ -208,7 +245,7 @@ def menu_gravar():
             if nome:
                 from utils.recorder import cmd_start
                 cmd_start(nome)
-                input(f"\n  {DIM}Enter para continuar...{NC}")
+                _pause()
 
         elif escolha == "passo":
             os.system("clear")
@@ -235,20 +272,20 @@ def menu_gravar():
                 cmd_step(kw, desc)
                 if READY_FILE.exists():
                     _executar_live(desc)
-                input(f"\n  {DIM}Enter para continuar...{NC}")
+                _pause()
 
         elif escolha == "status":
             os.system("clear")
             _banner("Status da Gravação", nome)
             _mostrar_passos(passos)
-            input(f"\n  {DIM}Enter para continuar...{NC}")
+            _pause()
 
         elif escolha == "parar":
             os.system("clear")
             _banner("Finalizar Gravação")
             from utils.recorder import cmd_stop
             cmd_stop()
-            input(f"\n  {DIM}Enter para continuar...{NC}")
+            _pause()
             return
 
 
@@ -311,7 +348,7 @@ def menu_rodar():
     if plat:
         args += plat.split()
     subprocess.run([str(ROOT / "run.sh")] + args, cwd=str(ROOT))
-    input(f"\n  {DIM}Enter para continuar...{NC}")
+    _pause()
 
 
 # ── Paralelo ──────────────────────────────────────────────────────────────────
@@ -331,7 +368,7 @@ def menu_paralelo():
     _banner("Execução Paralela", "iOS + Android")
     args = [] if escolha == "__todas__" else [escolha]
     subprocess.run([str(ROOT / "run-parallel.sh")] + args, cwd=str(ROOT))
-    input(f"\n  {DIM}Enter para continuar...{NC}")
+    _pause()
 
 
 # ── Live Runner ───────────────────────────────────────────────────────────────
@@ -396,7 +433,7 @@ def menu_live():
                         break
                     time.sleep(1)
 
-        input(f"\n  {DIM}Enter para continuar...{NC}")
+        _pause()
 
 
 # ── Devices ───────────────────────────────────────────────────────────────────
@@ -429,7 +466,7 @@ def tela_devices():
         print(f"    {DIM}(nenhum device conectado){NC}")
 
     print()
-    input(f"  {DIM}Enter para voltar...{NC}")
+    _pause()
 
 
 # ── Appium ────────────────────────────────────────────────────────────────────
@@ -450,7 +487,7 @@ def tela_appium():
     except Exception:
         err("Não foi possível conectar ao Appium.")
     print()
-    input(f"  {DIM}Enter para voltar...{NC}")
+    _pause()
 
 
 # ── Screenshot ────────────────────────────────────────────────────────────────
@@ -462,7 +499,7 @@ def tela_screenshot():
         err("Live runner não está ativo.")
         info("Inicie pelo menu  Live runner → Iniciar daemon")
         print()
-        input(f"  {DIM}Enter para voltar...{NC}")
+        _pause()
         return
 
     CMD_FILE.write_text("tiro um screenshot")
@@ -480,7 +517,7 @@ def tela_screenshot():
     else:
         err("Sem resposta do live runner.")
     print()
-    input(f"  {DIM}Enter para voltar...{NC}")
+    _pause()
 
 
 # ── Comandos diretos (modo não interativo) ────────────────────────────────────

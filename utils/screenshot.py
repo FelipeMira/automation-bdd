@@ -26,5 +26,9 @@ def take_screenshot(driver_session, label: str = "screenshot") -> str:
     platform = getattr(driver_session, "platform", "unknown")
     path = str(SCREENSHOTS_DIR / f"{label_clean}_{platform}_{ts}.png")
     driver_session.screenshot(path)
-    print(f"    📸 Screenshot salvo: {path}")
+    try:
+        rel = str(Path(path).relative_to(PROJECT_ROOT))
+    except ValueError:
+        rel = path
+    print(f"    📸 Screenshot salvo: {rel}")
     return path

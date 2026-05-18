@@ -67,8 +67,7 @@ def after_scenario(context, scenario):
     else:
         # Evidência do último passo (cenário passou)
         try:
-            path = take_screenshot(context.session, f"evidencia_{scenario.name.replace(' ', '_')}")
-            print(f"    📸 Evidência: {path}")
+            take_screenshot(context.session, f"evidencia_{scenario.name.replace(' ', '_')}")
         except Exception:
             pass
         print(f"\n  ✓ Cenário ok: {scenario.name}")
