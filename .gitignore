@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Behave
+.behave/
+
+# Screenshots de execução (evidências locais)
+automation_scripts/screenshots/
+
+# Arquivos temporários do live runner / recorder
+/tmp/bdd_*
+
+# Claude Code — configurações locais (podem conter IDs de sessão)
+.claude/
+
+# Outputs de execução
+pretty.output
+*.output
+
+# macOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+
+# Logs
+*.log
+nohup.out
