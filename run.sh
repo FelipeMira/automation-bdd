@@ -65,6 +65,25 @@ check_appium() {
   exit 1
 }
 
+# ─── Parse de argumentos próprios ────────────────────────────────────────────
+BEHAVE_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --platform)
+      export PLATFORM="$2"
+      shift 2
+      ;;
+    --platform=*)
+      export PLATFORM="${1#*=}"
+      shift
+      ;;
+    *)
+      BEHAVE_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
 check_deps
 check_appium
@@ -75,4 +94,4 @@ echo -e "${CYAN}  automation-bdd | Appium + Python + Behave${NC}"
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-behave "$@"
+behave "${BEHAVE_ARGS[@]}"
