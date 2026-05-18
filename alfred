@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-bdd — CLI de automação mobile BDD.
+alfred — CLI de automação mobile BDD.
 
 Uso:
-    bdd gravar <nome>           Inicia gravação de um cenário
-    bdd passo <keyword> <desc>  Adiciona um passo à gravação ativa
-    bdd status                  Mostra o que foi gravado até agora
-    bdd parar                   Finaliza gravação e salva o .feature
-    bdd rodar [feature] [opts]  Executa testes (padrão: todas as features)
-    bdd paralelo [feature]      Executa iOS + Android em paralelo
-    bdd live iniciar            Inicia o daemon de execução ao vivo
-    bdd live parar              Para o daemon ao vivo
-    bdd live status             Verifica se o daemon está rodando
-    bdd devices                 Lista simuladores iOS e devices Android
-    bdd appium                  Verifica se o Appium está rodando
-    bdd screenshot              Tira um screenshot avulso
+    alfred gravar <nome>           Inicia gravação de um cenário
+    alfred passo <keyword> <desc>  Adiciona um passo à gravação ativa
+    alfred status                  Mostra o que foi gravado até agora
+    alfred parar                   Finaliza gravação e salva o .feature
+    alfred rodar [feature] [opts]  Executa testes (padrão: todas as features)
+    alfred paralelo [feature]      Executa iOS + Android em paralelo
+    alfred live iniciar            Inicia o daemon de execução ao vivo
+    alfred live parar              Para o daemon ao vivo
+    alfred live status             Verifica se o daemon está rodando
+    alfred devices                 Lista simuladores iOS e devices Android
+    alfred appium                  Verifica se o Appium está rodando
+    alfred screenshot              Tira um screenshot avulso
 """
 
 import os
@@ -34,10 +34,10 @@ R  = "\033[0;31m"   # vermelho
 B  = "\033[1m"      # negrito
 NC = "\033[0m"      # reset
 
-PID_FILE   = Path("/tmp/bdd_live_pid")
-READY_FILE = Path("/tmp/bdd_live_ready")
-CMD_FILE   = Path("/tmp/bdd_live_cmd")
-RESULT_FILE = Path("/tmp/bdd_live_result")
+PID_FILE   = Path("/tmp/alfred_live_pid")
+READY_FILE = Path("/tmp/alfred_live_ready")
+CMD_FILE   = Path("/tmp/alfred_live_cmd")
+RESULT_FILE = Path("/tmp/alfred_live_result")
 
 
 def ok(msg):  print(f"{G}✓{NC}  {msg}")
@@ -51,32 +51,32 @@ def warn(msg): print(f"{Y}!{NC}  {msg}")
 def cmd_help():
     print(f"""
 {B}{C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}
-{B}  bdd — Automação Mobile BDD{NC}
+{B}  alfred — Automação Mobile BDD{NC}
 {C}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}
 
 {B}GRAVAÇÃO{NC}
-  {G}bdd gravar <nome>{NC}              Inicia gravação de um cenário
-  {G}bdd passo <keyword> <desc>{NC}     Adiciona passo (Given/When/Then/And)
-  {G}bdd status{NC}                     Mostra passos gravados até agora
-  {G}bdd parar{NC}                      Finaliza e salva o .feature
+  {G}alfred gravar <nome>{NC}              Inicia gravação de um cenário
+  {G}alfred passo <keyword> <desc>{NC}     Adiciona passo (Given/When/Then/And)
+  {G}alfred status{NC}                     Mostra passos gravados até agora
+  {G}alfred parar{NC}                      Finaliza e salva o .feature
 
 {B}EXECUÇÃO{NC}
-  {G}bdd rodar{NC}                      Roda todas as features
-  {G}bdd rodar <feature>{NC}            Roda uma feature específica
-  {G}bdd rodar --tags @smoke{NC}        Filtra por tag
-  {G}bdd rodar --platform ios{NC}       Força plataforma iOS ou android
-  {G}bdd paralelo{NC}                   Roda iOS + Android em paralelo
-  {G}bdd paralelo <feature>{NC}         Paralelo em feature específica
+  {G}alfred rodar{NC}                      Roda todas as features
+  {G}alfred rodar <feature>{NC}            Roda uma feature específica
+  {G}alfred rodar --tags @smoke{NC}        Filtra por tag
+  {G}alfred rodar --platform ios{NC}       Força plataforma iOS ou android
+  {G}alfred paralelo{NC}                   Roda iOS + Android em paralelo
+  {G}alfred paralelo <feature>{NC}         Paralelo em feature específica
 
 {B}LIVE RUNNER (execução ao vivo durante gravação){NC}
-  {G}bdd live iniciar{NC}               Inicia daemon Appium em background
-  {G}bdd live parar{NC}                 Para o daemon
-  {G}bdd live status{NC}                Verifica se está rodando
+  {G}alfred live iniciar{NC}               Inicia daemon Appium em background
+  {G}alfred live parar{NC}                 Para o daemon
+  {G}alfred live status{NC}                Verifica se está rodando
 
 {B}DEVICE / AMBIENTE{NC}
-  {G}bdd devices{NC}                    Lista simuladores iOS e devices Android
-  {G}bdd appium{NC}                     Verifica se o Appium está rodando
-  {G}bdd screenshot{NC}                 Tira screenshot avulso do device
+  {G}alfred devices{NC}                    Lista simuladores iOS e devices Android
+  {G}alfred appium{NC}                     Verifica se o Appium está rodando
+  {G}alfred screenshot{NC}                 Tira screenshot avulso do device
 
 {B}FEATURES DISPONÍVEIS{NC}""")
     _list_features()
@@ -99,7 +99,7 @@ def _list_features():
 
 def cmd_gravar(args):
     if not args:
-        err("Informe o nome do cenário. Ex: bdd gravar login_usuario")
+        err("Informe o nome do cenário. Ex: alfred gravar login_usuario")
         sys.exit(1)
     from utils.recorder import cmd_start
     cmd_start(args[0])
@@ -107,7 +107,7 @@ def cmd_gravar(args):
 
 def cmd_passo(args):
     if len(args) < 2:
-        err("Uso: bdd passo <Given|When|Then|And> \"descrição\"")
+        err("Uso: alfred passo <Given|When|Then|And> \"descrição\"")
         sys.exit(1)
     from utils.recorder import cmd_step
     cmd_step(args[0], " ".join(args[1:]))
@@ -151,7 +151,7 @@ def cmd_live(args):
             warn("Daemon já está rodando.")
             _live_show_status()
             return
-        log = Path("/tmp/bdd_live_runner.log")
+        log = Path("/tmp/alfred_live_runner.log")
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         proc = subprocess.Popen(
@@ -167,7 +167,7 @@ def cmd_live(args):
                 ok("Live runner pronto — sessão Appium ativa.")
                 return
             time.sleep(1)
-        err("Timeout aguardando sessão Appium. Verifique o log: /tmp/bdd_live_runner.log")
+        err("Timeout aguardando sessão Appium. Verifique o log: /tmp/alfred_live_runner.log")
 
     elif sub == "parar":
         if not PID_FILE.exists():
@@ -246,7 +246,7 @@ def cmd_appium():
 
 def cmd_screenshot():
     if not READY_FILE.exists():
-        err("Live runner não está ativo. Inicie com: bdd live iniciar")
+        err("Live runner não está ativo. Inicie com: alfred live iniciar")
         sys.exit(1)
     CMD_FILE.write_text("tiro um screenshot")
     info("Capturando screenshot...")
@@ -292,7 +292,7 @@ if __name__ == "__main__":
 
     if cmd not in COMMANDS:
         err(f"Comando desconhecido: '{cmd}'")
-        info("Use 'bdd' ou 'bdd ajuda' para ver os comandos disponíveis.")
+        info("Use 'alfred' ou 'alfred ajuda' para ver os comandos disponíveis.")
         sys.exit(1)
 
     fn = COMMANDS[cmd]
